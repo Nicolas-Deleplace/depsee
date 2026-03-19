@@ -6,6 +6,7 @@ import type { AnalysisReport, AnalyzeOptions, DepInfo, DepNode, DepType, Transit
 import { detectPackageManager } from './detector.js'
 import {
   fetchPackagesBatch,
+  getDescription,
   getReleaseDate,
   getLatestVersion,
   countMissedVersions,
@@ -175,20 +176,22 @@ export async function analyze(options: AnalyzeOptions = {}): Promise<AnalysisRep
       continue
     }
 
-    const installed       = parseVersion(wanted)
-    const latest          = getLatestVersion(data)
-    const installedAt     = getReleaseDate(data, installed) ?? new Date(0).toISOString()
-    const latestAt        = getReleaseDate(data, latest)    ?? new Date().toISOString()
-    const gapDays         = daysBetween(installedAt, latestAt)
-    const missedVersions  = countMissedVersions(data, installed, latest)
+    const installed        = parseVersion(wanted)
+    const latest           = getLatestVersion(data)
+    const installedAt      = getReleaseDate(data, installed) ?? new Date(0).toISOString()
+    const latestAt         = getReleaseDate(data, latest)    ?? new Date().toISOString()
+    const gapDays          = daysBetween(installedAt, latestAt)
+    const missedVersions   = countMissedVersions(data, installed, latest)
     const publishFrequency = getPublishFrequency(data)
-    const vulnerabilities = auditResults.get(name) ?? []
+    const vulnerabilities  = auditResults.get(name) ?? []
+    const description      = getDescription(data)
 
     const score  = computeScore({ installedAt, gapDays, missedVersions, publishFrequency, vulnerabilities })
     const status = deriveStatus(score, gapDays, publishFrequency, vulnerabilities)
 
     packages.push({
       name,
+      description,
       type,
       wanted,
       installed,
@@ -227,8 +230,10 @@ export async function analyze(options: AnalyzeOptions = {}): Promise<AnalysisRep
       const score  = computeScore({ installedAt, gapDays, missedVersions, publishFrequency, vulnerabilities })
       const status = deriveStatus(score, gapDays, publishFrequency, vulnerabilities)
 
+      const tData = transitiveData.get(name)
       packages.push({
         name,
+        description: tData ? getDescription(tData) : '',
         type: 'transitive',
         wanted: installed,
         installed,

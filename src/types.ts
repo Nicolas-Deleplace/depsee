@@ -29,6 +29,8 @@ export interface Vulnerability {
 
 export interface DepInfo {
   name: string
+  /** Short description from the npm registry. */
+  description: string
   type: DepType
   /** Version range declared in package.json (e.g. "^18.2.0") */
   wanted: string

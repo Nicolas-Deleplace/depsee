@@ -10,6 +10,7 @@ const DistTagsSchema = z.object({
 
 const NpmPackageSchema = z.object({
   name: z.string(),
+  description: z.string().optional(),
   'dist-tags': DistTagsSchema,
   time: VersionTimeSchema,
   versions: z.record(z.string(), z.unknown()),
@@ -75,6 +76,13 @@ export function getReleaseDate(data: NpmPackageData, version: string): string | 
   // Strip leading range chars like ^, ~, >=, etc.
   const clean = version.replace(/^[\^~>=<]+/, '').split('-')[0]
   return data.time[clean ?? version] ?? data.time[version]
+}
+
+/**
+ * Returns the package description from the registry, or an empty string.
+ */
+export function getDescription(data: NpmPackageData): string {
+  return data.description ?? ''
 }
 
 /**
