@@ -1,0 +1,53 @@
+{
+  "name": "depsee",
+  "version": "0.1.0",
+  "description": "See your dependencies like never before \u2014 interactive dependency dashboard with health scores, dataviz and security audit",
+  "keywords": [
+    "dependencies",
+    "npm",
+    "audit",
+    "security",
+    "visualization",
+    "cli",
+    "typescript"
+  ],
+  "author": "Nicolas Deleplace",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "depsee": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc --noEmit false && node -e \"const fs=require('fs');const p='dist/cli.js';const c=fs.readFileSync(p,'utf8');if(!c.startsWith('#!/'))fs.writeFileSync(p,'#!/usr/bin/env node\\n'+c)\"",
+    "dev": "tsup --watch",
+    "test": "vitest run --exclude src/__tests__/e2e.test.ts",
+    "test:e2e": "vitest run src/__tests__/e2e.test.ts",
+    "test:all": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^2.1.9"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
