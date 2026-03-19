@@ -1,0 +1,45 @@
+{
+  "auditReportVersion": 2,
+  "vulnerabilities": {
+    "lodash": {
+      "name": "lodash",
+      "severity": "high",
+      "via": [
+        {
+          "source": 1067,
+          "name": "lodash",
+          "dependency": "lodash",
+          "title": "Prototype Pollution in lodash",
+          "url": "https://github.com/advisories/GHSA-4xc9-xhrj-v574",
+          "severity": "high",
+          "range": "<4.17.21"
+        }
+      ],
+      "fixAvailable": {
+        "name": "lodash",
+        "version": "4.17.21",
+        "isSemVerMajor": false
+      }
+    },
+    "elliptic": {
+      "name": "elliptic",
+      "severity": "low",
+      "via": [
+        {
+          "source": 1099,
+          "name": "elliptic",
+          "dependency": "elliptic",
+          "title": "Timing attack in elliptic ECDH",
+          "url": "https://github.com/advisories/GHSA-49q7-c7j4-3p7m",
+          "severity": "low",
+          "range": "<6.6.0"
+        }
+      ],
+      "fixAvailable": true
+    }
+  },
+  "metadata": {
+    "vulnerabilities": { "critical": 0, "high": 1, "moderate": 0, "low": 1, "info": 0, "total": 2 },
+    "dependencies": { "prod": 80, "dev": 40, "optional": 0, "peer": 0, "peerOptional": 0, "total": 120 }
+  }
+}

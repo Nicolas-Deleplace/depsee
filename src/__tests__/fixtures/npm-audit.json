@@ -1,0 +1,62 @@
+{
+  "auditReportVersion": 2,
+  "vulnerabilities": {
+    "lodash": {
+      "name": "lodash",
+      "severity": "high",
+      "via": [
+        {
+          "source": 1067,
+          "name": "lodash",
+          "dependency": "lodash",
+          "title": "Prototype Pollution in lodash",
+          "url": "https://github.com/advisories/GHSA-4xc9-xhrj-v574",
+          "severity": "high",
+          "cwe": ["CWE-1321"],
+          "range": "<4.17.21"
+        }
+      ],
+      "fixAvailable": {
+        "name": "lodash",
+        "version": "4.17.21",
+        "isSemVerMajor": false
+      }
+    },
+    "minimatch": {
+      "name": "minimatch",
+      "severity": "critical",
+      "via": [
+        {
+          "source": 1088,
+          "name": "minimatch",
+          "dependency": "minimatch",
+          "title": "Regular Expression Denial of Service in minimatch",
+          "url": "https://github.com/advisories/GHSA-f8q6-p94x-37v3",
+          "severity": "critical",
+          "range": "<3.0.5"
+        }
+      ],
+      "fixAvailable": false
+    },
+    "qs": {
+      "name": "qs",
+      "severity": "moderate",
+      "via": [
+        {
+          "source": 1073,
+          "name": "qs",
+          "dependency": "qs",
+          "title": "qs vulnerable to Prototype Poisoning",
+          "url": "https://github.com/advisories/GHSA-hrpp-h998-j3pp",
+          "severity": "moderate",
+          "range": "<6.10.3"
+        }
+      ],
+      "fixAvailable": true
+    }
+  },
+  "metadata": {
+    "vulnerabilities": { "critical": 1, "high": 1, "moderate": 1, "low": 0, "info": 0, "total": 3 },
+    "dependencies": { "prod": 100, "dev": 50, "optional": 0, "peer": 0, "peerOptional": 0, "total": 150 }
+  }
+}
