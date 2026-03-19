@@ -99,9 +99,10 @@ function packageRow(pkg: DepInfo, interactive: boolean, pm: import('./types.js')
   return `
   <tr class="pkg-row" data-status="${pkg.status}" data-type="${pkg.type}" data-score="${pkg.score}" data-vuln="${pkg.vulnerabilities.length > 0 ? '1' : '0'}"
     style="border-bottom:1px solid #f3f4f6;transition:background 0.15s">
-    <td style="padding:12px 16px">
+    <td style="padding:12px 16px;max-width:280px">
       <div style="font-weight:600;font-size:14px;color:#111827">${pkg.name}</div>
-      <div style="font-size:11px;color:#9ca3af;margin-top:2px">${pkg.type === 'devDependency' ? 'dev' : pkg.type === 'transitive' ? '⚠ transitive' : 'dep'}</div>
+      ${pkg.description ? `<div style="font-size:11px;color:#6b7280;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${pkg.description.replace(/"/g, '&quot;')}">${pkg.description}</div>` : ''}
+      <div style="font-size:10px;color:#9ca3af;margin-top:2px">${pkg.type === 'devDependency' ? 'dev' : pkg.type === 'transitive' ? '⚠ transitive' : 'dep'}</div>
     </td>
     <td style="padding:12px 8px;font-family:monospace;font-size:13px;color:#374151">
       ${pkg.installed}
@@ -129,89 +130,68 @@ function buildChartData(summary: ReportSummary): string {
   })
 }
 
-// ─── Transitive graph renderer ────────────────────────────────────────────────
+// ─── D3 graph data builder ────────────────────────────────────────────────────
 
-/** Counts every descendant in a node's subtree (not just direct children). */
-function countDescendants(node: DepNode): number {
-  return node.children.reduce((sum, c) => sum + 1 + countDescendants(c), 0)
+interface D3Node {
+  id: string
+  version: string
+  description: string
+  score: number | null
+  status: string | null
+  isDirect: boolean
+  isRoot: boolean
 }
 
-/** Renders a single tree node recursively, indented by `depth`. */
-function renderDepNode(node: DepNode, depth: number, scoreMap: Map<string, DepInfo>): string {
-  const pkg   = scoreMap.get(node.name)
-  const color = pkg ? scoreColor(pkg.score) : '#d1d5db'
-  const hasChildren = node.children.length > 0
-  const nodeId = `tn-${node.name.replace(/[^a-z0-9@]/gi, '-')}-d${depth}`
-  const indent = depth * 18
+interface D3Link { source: string; target: string }
 
-  return `
-    <div style="margin-left:${indent}px">
-      <div style="display:flex;align-items:center;gap:6px;padding:3px 0">
-        ${hasChildren
-          ? `<button onclick="toggleNode('${nodeId}',this)" style="width:14px;height:14px;border:none;background:none;cursor:pointer;color:#9ca3af;font-size:9px;padding:0;flex-shrink:0;transition:transform 0.15s">▶</button>`
-          : `<span style="width:14px;flex-shrink:0"></span>`}
-        <span style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0"></span>
-        <span style="font-size:12px;color:#374151;font-family:monospace">${node.name}</span>
-        <span style="font-size:11px;color:#9ca3af">${node.version}</span>
-        ${hasChildren ? `<span style="font-size:10px;color:#9ca3af">(${node.children.length})</span>` : ''}
-      </div>
-      ${hasChildren
-        ? `<div id="${nodeId}" style="display:none">${node.children.map((c) => renderDepNode(c, depth + 1, scoreMap)).join('')}</div>`
-        : ''}
-    </div>`
-}
-
-/** Renders the full transitive graph section. Returns empty string if no data. */
-function renderTransitiveGraph(graph: TransitiveGraph, packages: DepInfo[]): string {
-  const entries = Object.entries(graph)
-  if (entries.length === 0) return ''
-
+/**
+ * Flattens the TransitiveGraph into D3-ready nodes + links arrays.
+ * Adds a synthetic __root__ node connected to every direct dependency.
+ */
+function buildD3GraphData(
+  graph: TransitiveGraph,
+  packages: DepInfo[],
+  projectName: string,
+): string {
   const scoreMap = new Map(packages.map((p) => [p.name, p]))
+  const nodes: D3Node[] = []
+  const links: D3Link[] = []
+  const seen = new Set<string>()
 
-  const rows = entries.map(([name, node]) => {
-    const pkg   = scoreMap.get(name)
-    const color = pkg ? scoreColor(pkg.score) : '#d1d5db'
-    const total = countDescendants(node)
-    const rootId = `tg-${name.replace(/[^a-z0-9@]/gi, '-')}`
+  // Synthetic project root
+  nodes.push({ id: '__root__', version: '', description: projectName, score: null, status: null, isDirect: false, isRoot: true })
+  seen.add('__root__')
 
-    return `
-      <div style="border-bottom:1px solid #f3f4f6">
-        <div style="display:flex;align-items:center;gap:10px;padding:10px 0">
-          <button onclick="toggleNode('${rootId}',this)"
-            style="display:flex;align-items:center;gap:8px;border:none;background:none;cursor:pointer;text-align:left;padding:0">
-            <span style="color:#9ca3af;font-size:9px;transition:transform 0.15s">▶</span>
-            <span style="width:10px;height:10px;border-radius:50%;background:${color};flex-shrink:0"></span>
-            <span style="font-size:13px;font-weight:600;color:#111827;font-family:monospace">${name}</span>
-            <span style="font-size:12px;color:#9ca3af">${node.version}</span>
-          </button>
-          <span style="font-size:11px;background:#f3f4f6;color:#6b7280;padding:1px 8px;border-radius:999px">${total} transitive</span>
-        </div>
-        <div id="${rootId}" style="display:none;padding-bottom:8px">
-          ${node.children.map((c) => renderDepNode(c, 1, scoreMap)).join('')}
-        </div>
-      </div>`
-  }).join('')
+  function visit(node: DepNode, parentId: string, isDirect: boolean): void {
+    if (!seen.has(node.name)) {
+      seen.add(node.name)
+      const pkg = scoreMap.get(node.name)
+      nodes.push({
+        id: node.name,
+        version: node.version,
+        description: pkg?.description ?? '',
+        score: pkg?.score ?? null,
+        status: pkg?.status ?? null,
+        isDirect,
+        isRoot: false,
+      })
+    }
+    links.push({ source: parentId, target: node.name })
+    for (const child of node.children) visit(child, node.name, false)
+  }
 
-  return `
-  <!-- Transitive dependency graph -->
-  <div style="background:#fff;border-radius:12px;border:1px solid #e5e7eb;padding:24px;margin-bottom:24px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
-      <div style="font-size:13px;font-weight:700;color:#374151">Transitive dependency graph</div>
-      <div style="font-size:12px;color:#9ca3af">${entries.length} direct deps · click to expand</div>
-    </div>
-    <div style="font-size:12px;color:#9ca3af;margin-bottom:16px">
-      Dot colour = health score of that package. Grey = not in your direct deps.
-    </div>
-    <div>${rows}</div>
-  </div>`
+  for (const node of Object.values(graph)) visit(node, '__root__', true)
+
+  return JSON.stringify({ nodes, links })
 }
 
 // ─── Main renderer ────────────────────────────────────────────────────────────
 
 export function renderHTML({ summary, packages, transitiveGraph = {}, interactive = false, port = 4242 }: RenderInput): string {
   const rows = packages.map((p) => packageRow(p, interactive, summary.packageManager)).join('')
-  const graphSection = renderTransitiveGraph(transitiveGraph, packages)
   const chartData = buildChartData(summary)
+  const graphData = buildD3GraphData(transitiveGraph, packages, summary.projectName)
+  const hasGraph  = Object.keys(transitiveGraph).length > 0
   const pmLabel = getPackageManagerLabel(summary.packageManager)
   const globalColor = scoreColor(summary.score)
   const globalBg = scoreBg(summary.score)
@@ -225,14 +205,19 @@ export function renderHTML({ summary, packages, transitiveGraph = {}, interactiv
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>depsee — ${summary.projectName}</title>
-  <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#f9fafb; margin:0; }
     .pkg-row:hover { background: #f9fafb; }
     table { border-collapse: collapse; width: 100%; }
     th { text-align:left; font-size:11px; font-weight:600; color:#6b7280; text-transform:uppercase; letter-spacing:0.05em; padding:8px 16px; border-bottom:1px solid #e5e7eb; background:#f9fafb; }
-    .tg-arrow { display:inline-block; transition:transform 0.15s; }
+    .tab-btn { font-size:13px; font-weight:600; padding:8px 20px; border:none; background:none; cursor:pointer; color:#6b7280; border-bottom:2px solid transparent; transition:all 0.15s; }
+    .tab-btn.active { color:#111827; border-bottom-color:#111827; }
+    .tab-btn:hover:not(.active) { color:#374151; }
+    #graph-svg { width:100%; height:calc(100vh - 260px); min-height:500px; }
+    #graph-svg .node { cursor:pointer; }
+    #graph-tooltip { position:fixed;pointer-events:none;background:#1e293b;color:#f8fafc;padding:10px 14px;border-radius:8px;font-size:12px;line-height:1.6;max-width:280px;z-index:1000;display:none;box-shadow:0 4px 20px rgba(0,0,0,0.3); }
   </style>
 </head>
 <body>
@@ -270,11 +255,17 @@ export function renderHTML({ summary, packages, transitiveGraph = {}, interactiv
   `).join('')}
 </div>
 
-<!-- Main content -->
-<div style="max-width:1400px;margin:0 auto;padding:24px 32px">
+<!-- Tab nav -->
+<div style="background:#fff;border-bottom:1px solid #e5e7eb;padding:0 32px;display:flex;gap:4px">
+  <button class="tab-btn active" id="tab-btn-overview" onclick="switchTab('overview')">Overview</button>
+  <button class="tab-btn" id="tab-btn-packages" onclick="switchTab('packages')">Packages <span style="font-size:11px;color:#9ca3af">(${summary.total})</span></button>
+  ${hasGraph ? `<button class="tab-btn" id="tab-btn-graph" onclick="switchTab('graph')">Dependency Graph</button>` : ''}
+</div>
 
-  <!-- Charts row -->
-  <div style="display:grid;grid-template-columns:1fr 2fr;gap:24px;margin-bottom:24px">
+<!-- ── Pane: Overview ─────────────────────────────────────────────────────── -->
+<div id="pane-overview" style="max-width:1400px;margin:0 auto;padding:24px 32px">
+
+  <div style="display:grid;grid-template-columns:1fr 2fr;gap:24px">
 
     <!-- Donut chart -->
     <div style="background:#fff;border-radius:12px;border:1px solid #e5e7eb;padding:24px;display:flex;flex-direction:column;align-items:center">
@@ -287,14 +278,16 @@ export function renderHTML({ summary, packages, transitiveGraph = {}, interactiv
       <div style="font-size:13px;font-weight:700;color:#374151;margin-bottom:16px">Health heatmap</div>
       <div id="heatmap" style="display:flex;flex-wrap:wrap;gap:6px">
         ${packages.map((p) => `
-          <div title="${p.name} — ${p.score}/100" style="width:36px;height:36px;border-radius:6px;background:${scoreColor(p.score)};opacity:0.85;display:flex;align-items:center;justify-content:center;cursor:default">
+          <div title="${p.name} — ${p.score}/100" onclick="switchTab('packages')" style="width:36px;height:36px;border-radius:6px;background:${scoreColor(p.score)};opacity:0.85;display:flex;align-items:center;justify-content:center;cursor:pointer">
             <span style="font-size:9px;font-weight:700;color:#fff">${p.score}</span>
           </div>`).join('')}
       </div>
     </div>
   </div>
+</div>
 
-  ${graphSection}
+<!-- ── Pane: Packages ─────────────────────────────────────────────────────── -->
+<div id="pane-packages" style="display:none;max-width:1400px;margin:0 auto;padding:24px 32px">
 
   <!-- Filters -->
   <div style="background:#fff;border-radius:12px;border:1px solid #e5e7eb;padding:16px 24px;margin-bottom:16px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">
@@ -342,18 +335,177 @@ export function renderHTML({ summary, packages, transitiveGraph = {}, interactiv
   </div>
 </div>
 
-<script>
-const CHART_DATA = ${chartData}
+<!-- ── Pane: Graph ────────────────────────────────────────────────────────── -->
+${hasGraph ? `
+<div id="pane-graph" style="display:none;padding:24px 32px">
+  <div style="background:#fff;border-radius:12px;border:1px solid #e5e7eb;overflow:hidden;position:relative">
+    <!-- Toolbar -->
+    <div style="padding:14px 20px;border-bottom:1px solid #f3f4f6;display:flex;align-items:center;gap:12px">
+      <span style="font-size:13px;font-weight:700;color:#374151">Dependency graph</span>
+      <span style="font-size:12px;color:#9ca3af">Drag · scroll to zoom · hover for details</span>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button onclick="resetZoom()" style="font-size:12px;padding:4px 12px;border-radius:6px;border:1px solid #e5e7eb;background:#fff;color:#374151;cursor:pointer">Reset zoom</button>
+        <button onclick="toggleLabels()" id="btn-labels" style="font-size:12px;padding:4px 12px;border-radius:6px;border:1px solid #e5e7eb;background:#fff;color:#374151;cursor:pointer">Labels: direct only</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px;font-size:11px;color:#9ca3af">
+        <span>⬤ <span style="color:#22c55e">healthy</span></span>
+        <span>⬤ <span style="color:#f59e0b">stale</span></span>
+        <span>⬤ <span style="color:#ef4444">at risk</span></span>
+        <span>⬤ <span style="color:#d1d5db">unknown</span></span>
+      </div>
+    </div>
+    <svg id="graph-svg"></svg>
+  </div>
+</div>
+<div id="graph-tooltip"></div>
+` : ''}
 
-// ── Transitive graph toggle ───────────────────────────────────────────────────
-function toggleNode(id, btn) {
-  const el = document.getElementById(id)
-  if (!el) return
-  const isOpen = el.style.display !== 'none'
-  el.style.display = isOpen ? 'none' : 'block'
-  // Rotate the ▶ arrow on the button
-  const arrow = btn ? btn.querySelector('span') : null
-  if (arrow) arrow.style.transform = isOpen ? '' : 'rotate(90deg)'
+<script>
+const CHART_DATA  = ${chartData}
+const GRAPH_DATA  = ${graphData}
+const HAS_GRAPH   = ${hasGraph}
+
+// ── Tab system ────────────────────────────────────────────────────────────────
+let graphInitialized = false
+const TABS = ['overview', 'packages', 'graph']
+
+function switchTab(name) {
+  TABS.forEach(t => {
+    const pane = document.getElementById('pane-' + t)
+    const btn  = document.getElementById('tab-btn-' + t)
+    if (pane) pane.style.display = t === name ? (t === 'graph' ? 'block' : 'block') : 'none'
+    if (btn)  btn.classList.toggle('active', t === name)
+  })
+  if (name === 'graph' && HAS_GRAPH && !graphInitialized) {
+    graphInitialized = true
+    initGraph()
+  }
+}
+
+// ── D3 Force-directed graph ───────────────────────────────────────────────────
+let zoomBehavior, svgRoot
+
+function nodeRadius(d) {
+  if (d.isRoot)   return 18
+  if (d.isDirect) return 12
+  return 7
+}
+
+function nodeColor(d) {
+  if (d.isRoot)       return '#111827'
+  if (d.score === null) return '#d1d5db'
+  if (d.score >= 75)  return '#22c55e'
+  if (d.score >= 45)  return '#f59e0b'
+  return '#ef4444'
+}
+
+function nodeStroke(d) {
+  if (d.isRoot)   return '#374151'
+  if (d.isDirect) return '#fff'
+  return '#fff'
+}
+
+function initGraph() {
+  const svgEl = document.getElementById('graph-svg')
+  const W = svgEl.clientWidth || 900
+  const H = svgEl.clientHeight || 600
+
+  svgRoot = d3.select('#graph-svg')
+
+  // Arrow marker
+  svgRoot.append('defs').append('marker')
+    .attr('id', 'arrow').attr('viewBox', '0 -4 8 8')
+    .attr('refX', 22).attr('refY', 0)
+    .attr('markerWidth', 5).attr('markerHeight', 5)
+    .attr('orient', 'auto')
+    .append('path').attr('d', 'M0,-4L8,0L0,4').attr('fill', '#d1d5db')
+
+  const g = svgRoot.append('g')
+
+  zoomBehavior = d3.zoom().scaleExtent([0.1, 5])
+    .on('zoom', e => g.attr('transform', e.transform))
+  svgRoot.call(zoomBehavior)
+
+  // Clone nodes/links so D3 can mutate them
+  const nodes = GRAPH_DATA.nodes.map(d => ({...d}))
+  const links = GRAPH_DATA.links.map(d => ({...d}))
+
+  const sim = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id(d => d.id).distance(d => d.source.isRoot ? 120 : 70))
+    .force('charge', d3.forceManyBody().strength(d => d.isRoot ? -600 : d.isDirect ? -300 : -120))
+    .force('center', d3.forceCenter(W / 2, H / 2))
+    .force('collide', d3.forceCollide(d => nodeRadius(d) + 8))
+
+  // Links
+  const link = g.append('g').attr('stroke', '#e5e7eb').attr('stroke-width', 1.2)
+    .selectAll('line').data(links).join('line')
+    .attr('marker-end', 'url(#arrow)')
+
+  // Nodes
+  const node = g.append('g').selectAll('circle').data(nodes).join('circle')
+    .attr('class', 'node')
+    .attr('r', nodeRadius)
+    .attr('fill', nodeColor)
+    .attr('stroke', nodeStroke)
+    .attr('stroke-width', d => d.isRoot ? 3 : 1.5)
+    .call(d3.drag()
+      .on('start', (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y })
+      .on('drag',  (e, d) => { d.fx = e.x; d.fy = e.y })
+      .on('end',   (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null })
+    )
+    .on('mousemove', showTooltip)
+    .on('mouseout',  hideTooltip)
+
+  // Labels
+  const label = g.append('g').selectAll('text').data(nodes).join('text')
+    .text(d => d.isRoot ? d.description : d.id)
+    .attr('font-size', d => d.isRoot ? 13 : d.isDirect ? 11 : 9)
+    .attr('font-weight', d => d.isRoot || d.isDirect ? '700' : '400')
+    .attr('fill', d => d.isRoot ? '#111827' : '#374151')
+    .attr('pointer-events', 'none')
+    .attr('display', d => d.isRoot || d.isDirect ? null : 'none')
+
+  sim.on('tick', () => {
+    link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+        .attr('x2', d => d.target.x).attr('y2', d => d.target.y)
+    node.attr('cx', d => d.x).attr('cy', d => d.y)
+    label.attr('x', d => d.x + nodeRadius(d) + 4).attr('y', d => d.y + 4)
+  })
+}
+
+// Tooltip
+function showTooltip(event, d) {
+  const tt = document.getElementById('graph-tooltip')
+  const c  = d.score === null ? '#9ca3af' : d.score >= 75 ? '#22c55e' : d.score >= 45 ? '#f59e0b' : '#ef4444'
+  let html = \`<div style="font-weight:700;font-size:13px;margin-bottom:3px">\${d.isRoot ? d.description : d.id}</div>\`
+  if (!d.isRoot) {
+    html += \`<div style="color:#94a3b8;margin-bottom:4px;font-size:11px">\${d.version}</div>\`
+    if (d.description) html += \`<div style="color:#cbd5e1;margin-bottom:6px">\${d.description}</div>\`
+    if (d.score !== null) html += \`<div>Score <span style="color:\${c};font-weight:700">\${d.score}/100</span>\${d.status ? ' · ' + d.status : ''}</div>\`
+    else html += \`<div style="color:#9ca3af">Transitive — not directly analysed</div>\`
+  }
+  tt.innerHTML = html
+  tt.style.display = 'block'
+  tt.style.left = (event.clientX + 14) + 'px'
+  tt.style.top  = (event.clientY - 10) + 'px'
+}
+function hideTooltip() { document.getElementById('graph-tooltip').style.display = 'none' }
+
+function resetZoom() {
+  svgRoot && svgRoot.transition().duration(400).call(zoomBehavior.transform, d3.zoomIdentity)
+}
+
+let labelsMode = 0 // 0=direct only, 1=all, 2=none
+function toggleLabels() {
+  labelsMode = (labelsMode + 1) % 3
+  const modes = ['direct only', 'all', 'none']
+  document.getElementById('btn-labels').textContent = 'Labels: ' + modes[labelsMode]
+  if (!svgRoot) return
+  svgRoot.selectAll('text').attr('display', function(d) {
+    if (labelsMode === 1) return null
+    if (labelsMode === 2) return 'none'
+    return d.isRoot || d.isDirect ? null : 'none'
+  })
 }
 
 let activeStatus = 'all'
