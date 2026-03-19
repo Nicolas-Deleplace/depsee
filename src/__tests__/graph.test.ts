@@ -132,3 +132,70 @@ describe('buildTransitiveGraph', () => {
     expect(graph['zod']?.children).toHaveLength(0)
   })
 })
+
+// ─── yarn.lock tests ──────────────────────────────────────────────────────────
+
+function makeYarnLock(
+  pkgs: Record<string, { version: string; dependencies?: Record<string, string> }>,
+): string {
+  let out = '# yarn lockfile v1\n\n'
+  for (const [name, info] of Object.entries(pkgs)) {
+    out += `${name}@*:\n`
+    out += `  version "${info.version}"\n`
+    if (info.dependencies && Object.keys(info.dependencies).length > 0) {
+      out += `  dependencies:\n`
+      for (const dep of Object.keys(info.dependencies)) {
+        out += `    ${dep} "*"\n`
+      }
+    }
+    out += '\n'
+  }
+  return out
+}
+
+describe('buildTransitiveGraph — yarn.lock', () => {
+  it('falls back to yarn.lock when no package-lock.json', () => {
+    mockReadFileSync.mockImplementation((path: unknown) => {
+      if (String(path).endsWith('package-lock.json')) throw new Error('ENOENT')
+      if (String(path).endsWith('yarn.lock')) return makeYarnLock({ react: { version: '18.2.0' } })
+      throw new Error('ENOENT')
+    })
+    const graph = buildTransitiveGraph('/fake', ['react'])
+    expect(graph['react']).toMatchObject({ name: 'react', version: '18.2.0', children: [] })
+  })
+
+  it('parses transitive deps from yarn.lock', () => {
+    mockReadFileSync.mockImplementation((path: unknown) => {
+      if (String(path).endsWith('package-lock.json')) throw new Error('ENOENT')
+      if (String(path).endsWith('yarn.lock')) return makeYarnLock({
+        express:      { version: '4.18.2', dependencies: { 'body-parser': '*' } },
+        'body-parser': { version: '1.20.2' },
+      })
+      throw new Error('ENOENT')
+    })
+    const graph = buildTransitiveGraph('/fake', ['express'])
+    expect(graph['express']?.children).toHaveLength(1)
+    expect(graph['express']?.children[0]).toMatchObject({ name: 'body-parser', version: '1.20.2' })
+  })
+
+  it('ignores yarn Berry lockfiles (has __metadata)', () => {
+    mockReadFileSync.mockImplementation((path: unknown) => {
+      if (String(path).endsWith('package-lock.json')) throw new Error('ENOENT')
+      if (String(path).endsWith('yarn.lock')) return '__metadata:\n  version: 6\n'
+      throw new Error('ENOENT')
+    })
+    expect(buildTransitiveGraph('/fake', ['react'])).toEqual({})
+  })
+
+  it('handles scoped packages in yarn.lock', () => {
+    mockReadFileSync.mockImplementation((path: unknown) => {
+      if (String(path).endsWith('package-lock.json')) throw new Error('ENOENT')
+      if (String(path).endsWith('yarn.lock')) return makeYarnLock({
+        '@babel/core': { version: '7.24.0' },
+      })
+      throw new Error('ENOENT')
+    })
+    const graph = buildTransitiveGraph('/fake', ['@babel/core'])
+    expect(graph['@babel/core']).toMatchObject({ name: '@babel/core', version: '7.24.0' })
+  })
+})
