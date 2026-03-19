@@ -199,3 +199,72 @@ describe('buildTransitiveGraph — yarn.lock', () => {
     expect(graph['@babel/core']).toMatchObject({ name: '@babel/core', version: '7.24.0' })
   })
 })
+
+// ─── pnpm-lock.yaml tests ─────────────────────────────────────────────────────
+
+/** Builds a pnpm v9 lockfile string (packages: + snapshots: sections). */
+function makePnpmLock(
+  pkgs: Record<string, { version: string; dependencies?: Record<string, string> }>,
+): string {
+  let packages = 'packages:\n\n'
+  let snapshots = 'snapshots:\n\n'
+
+  for (const [name, info] of Object.entries(pkgs)) {
+    const ver = info.version
+    // packages section: resolution only
+    packages += `  ${name}@${ver}:\n    resolution: {integrity: sha512-test}\n\n`
+    // snapshots section: dep relationships
+    if (info.dependencies && Object.keys(info.dependencies).length > 0) {
+      snapshots += `  ${name}@${ver}:\n    dependencies:\n`
+      for (const [dep] of Object.entries(info.dependencies)) {
+        snapshots += `      ${dep}: 1.0.0\n`
+      }
+      snapshots += '\n'
+    } else {
+      snapshots += `  ${name}@${ver}: {}\n\n`
+    }
+  }
+
+  return `lockfileVersion: '9.0'\n\n${packages}${snapshots}`
+}
+
+describe('buildTransitiveGraph — pnpm-lock.yaml', () => {
+  it('falls back to pnpm-lock.yaml when no package-lock.json or yarn.lock', () => {
+    mockReadFileSync.mockImplementation((path: unknown) => {
+      if (String(path).endsWith('package-lock.json')) throw new Error('ENOENT')
+      if (String(path).endsWith('yarn.lock')) throw new Error('ENOENT')
+      if (String(path).endsWith('pnpm-lock.yaml')) return makePnpmLock({ react: { version: '18.2.0' } })
+      throw new Error('ENOENT')
+    })
+    const graph = buildTransitiveGraph('/fake', ['react'])
+    expect(graph['react']).toMatchObject({ name: 'react', version: '18.2.0', children: [] })
+  })
+
+  it('reads transitive deps from snapshots section (v9 format)', () => {
+    mockReadFileSync.mockImplementation((path: unknown) => {
+      if (String(path).endsWith('package-lock.json')) throw new Error('ENOENT')
+      if (String(path).endsWith('yarn.lock')) throw new Error('ENOENT')
+      if (String(path).endsWith('pnpm-lock.yaml')) return makePnpmLock({
+        react:         { version: '18.2.0', dependencies: { 'loose-envify': '*' } },
+        'loose-envify': { version: '1.4.0' },
+      })
+      throw new Error('ENOENT')
+    })
+    const graph = buildTransitiveGraph('/fake', ['react'])
+    expect(graph['react']?.children).toHaveLength(1)
+    expect(graph['react']?.children[0]).toMatchObject({ name: 'loose-envify', version: '1.4.0' })
+  })
+
+  it('handles scoped packages in pnpm-lock.yaml', () => {
+    mockReadFileSync.mockImplementation((path: unknown) => {
+      if (String(path).endsWith('package-lock.json')) throw new Error('ENOENT')
+      if (String(path).endsWith('yarn.lock')) throw new Error('ENOENT')
+      if (String(path).endsWith('pnpm-lock.yaml')) return makePnpmLock({
+        '@types/node': { version: '20.0.0' },
+      })
+      throw new Error('ENOENT')
+    })
+    const graph = buildTransitiveGraph('/fake', ['@types/node'])
+    expect(graph['@types/node']).toMatchObject({ name: '@types/node', version: '20.0.0' })
+  })
+})

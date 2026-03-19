@@ -157,7 +157,7 @@ function adjFromYarnLock(cwd: string): Map<string, AdjEntry> | null {
   return adj.size > 0 ? adj : null
 }
 
-/** Parses `pnpm-lock.yaml` v6+ into an adjacency map (best-effort, no YAML lib). */
+/** Parses `pnpm-lock.yaml` v6/v8/v9 into an adjacency map (best-effort, no YAML lib). */
 function adjFromPnpmLock(cwd: string): Map<string, AdjEntry> | null {
   let content: string
   try {
@@ -167,10 +167,11 @@ function adjFromPnpmLock(cwd: string): Map<string, AdjEntry> | null {
   }
 
   const adj = new Map<string, AdjEntry>()
-  // pnpm-lock.yaml has a `packages:` section with entries like:
-  //   /pkg@1.2.3:
-  //     dependencies:
-  //       dep: 4.5.6
+  // Handles both pnpm v6/v8 format (/pkg@version:) and v9 format (pkg@version:).
+  // In v9, `packages:` section only has resolution metadata (no deps), while
+  // `snapshots:` section has the actual dependency relationships. We must
+  // prefer entries with deps over earlier empty entries, so we overwrite
+  // whenever the new entry has dep data.
   const pkgBlockRe = /^\s{2}\/?([\w@][\w./-]*)@([\d][^\s:]*):$/
   let curName = ''
   let curVer = ''
@@ -178,8 +179,12 @@ function adjFromPnpmLock(cwd: string): Map<string, AdjEntry> | null {
   const curDeps: string[] = []
 
   const flush = () => {
-    if (curName && !adj.has(curName)) {
-      adj.set(curName, { version: curVer, deps: [...curDeps] })
+    if (curName) {
+      const existing = adj.get(curName)
+      // Overwrite if: (a) not yet seen, or (b) we now have dep data that was missing before
+      if (!existing || curDeps.length > 0) {
+        adj.set(curName, { version: curVer, deps: [...curDeps] })
+      }
     }
     curDeps.length = 0
     inDeps = false
