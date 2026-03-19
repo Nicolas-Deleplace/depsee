@@ -1,6 +1,6 @@
 {
   "name": "depsee",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "See your dependencies like never before — interactive dependency dashboard with health scores, dataviz and security audit",
   "keywords": [
     "dependencies",
