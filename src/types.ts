@@ -69,11 +69,29 @@ export interface ReportSummary {
   generatedAt: string
 }
 
+// ─── Transitive dependency graph ──────────────────────────────────────────────
+
+/**
+ * A node in the transitive dependency tree.
+ * Each direct dependency is a root node; its children are the packages it
+ * pulls in, recursively up to a configurable depth.
+ */
+export interface DepNode {
+  name: string
+  version: string
+  children: DepNode[]
+}
+
+/** Maps each direct dependency name to its resolved dependency subtree. */
+export type TransitiveGraph = Record<string, DepNode>
+
 // ─── Analysis report ──────────────────────────────────────────────────────────
 
 export interface AnalysisReport {
   summary: ReportSummary
   packages: DepInfo[]
+  /** Transitive dependency tree built from the lockfile. */
+  transitiveGraph: TransitiveGraph
   /** Write an interactive HTML report to disk */
   toHTML(outputPath?: string): Promise<void>
   /** Write the raw data as JSON to disk */
