@@ -87,7 +87,8 @@ function packageRow(pkg: DepInfo, interactive: boolean, pm: import('./types.js')
   // when a concrete fixed version is known (fixedIn is defined and non-empty).
   const fixVersion = pkg.vulnerabilities.find((v) => v.fixedIn)?.fixedIn
   const canFix = pkg.type === 'transitive' && fixVersion !== undefined
-  const updateBtn = interactive && pkg.type !== 'transitive'
+  const hasUpdate = pkg.installed !== pkg.latest
+  const updateBtn = interactive && pkg.type !== 'transitive' && hasUpdate
     ? `<button data-cmd="${getUpdateCommand(pm, pkg.name)}" onclick="runCmd(this.dataset.cmd, this)" style="font-size:11px;padding:4px 10px;border-radius:6px;background:#3b82f6;color:#fff;border:none;cursor:pointer;font-weight:600">Update</button>`
     : interactive && canFix
       ? `<button data-pkg="${pkg.name}" data-version="${fixVersion}" onclick="runResolution(this.dataset.pkg, this.dataset.version, this)" style="font-size:11px;padding:4px 10px;border-radius:6px;background:#7c3aed;color:#fff;border:none;cursor:pointer;font-weight:600">Fix resolution</button>`
@@ -258,14 +259,13 @@ export function renderHTML({ summary, packages, transitiveGraph = {}, interactiv
 <!-- Tab nav -->
 <div style="background:#fff;border-bottom:1px solid #e5e7eb;padding:0 32px;display:flex;gap:4px">
   <button class="tab-btn active" id="tab-btn-overview" onclick="switchTab('overview')">Overview</button>
-  <button class="tab-btn" id="tab-btn-packages" onclick="switchTab('packages')">Packages <span style="font-size:11px;color:#9ca3af">(${summary.total})</span></button>
   ${hasGraph ? `<button class="tab-btn" id="tab-btn-graph" onclick="switchTab('graph')">Dependency Graph</button>` : ''}
 </div>
 
 <!-- ── Pane: Overview ─────────────────────────────────────────────────────── -->
 <div id="pane-overview" style="max-width:1400px;margin:0 auto;padding:24px 32px">
 
-  <div style="display:grid;grid-template-columns:1fr 2fr;gap:24px">
+  <div style="display:grid;grid-template-columns:1fr 2fr;gap:24px;margin-bottom:24px">
 
     <!-- Donut chart -->
     <div style="background:#fff;border-radius:12px;border:1px solid #e5e7eb;padding:24px;display:flex;flex-direction:column;align-items:center">
@@ -278,16 +278,12 @@ export function renderHTML({ summary, packages, transitiveGraph = {}, interactiv
       <div style="font-size:13px;font-weight:700;color:#374151;margin-bottom:16px">Health heatmap</div>
       <div id="heatmap" style="display:flex;flex-wrap:wrap;gap:6px">
         ${packages.map((p) => `
-          <div title="${p.name} — ${p.score}/100" onclick="switchTab('packages')" style="width:36px;height:36px;border-radius:6px;background:${scoreColor(p.score)};opacity:0.85;display:flex;align-items:center;justify-content:center;cursor:pointer">
+          <div title="${p.name} — ${p.score}/100" style="width:36px;height:36px;border-radius:6px;background:${scoreColor(p.score)};opacity:0.85;display:flex;align-items:center;justify-content:center">
             <span style="font-size:9px;font-weight:700;color:#fff">${p.score}</span>
           </div>`).join('')}
       </div>
     </div>
   </div>
-</div>
-
-<!-- ── Pane: Packages ─────────────────────────────────────────────────────── -->
-<div id="pane-packages" style="display:none;max-width:1400px;margin:0 auto;padding:24px 32px">
 
   <!-- Filters -->
   <div style="background:#fff;border-radius:12px;border:1px solid #e5e7eb;padding:16px 24px;margin-bottom:16px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">
@@ -313,7 +309,7 @@ export function renderHTML({ summary, packages, transitiveGraph = {}, interactiv
     </div>
   </div>
 
-  <!-- Table -->
+  <!-- Packages table -->
   <div style="background:#fff;border-radius:12px;border:1px solid #e5e7eb;overflow:hidden">
     <table>
       <thead>
@@ -346,6 +342,7 @@ ${hasGraph ? `
       <div style="display:flex;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden">
         <button id="layout-force"  onclick="renderGraph('force', currentDepth)"  style="font-size:12px;padding:4px 14px;border:none;background:#111827;color:#fff;cursor:pointer;font-weight:500">Force</button>
         <button id="layout-radial" onclick="renderGraph('radial', currentDepth)" style="font-size:12px;padding:4px 14px;border:none;background:#fff;color:#374151;cursor:pointer;font-weight:500">Radial tree</button>
+        <button id="layout-list"   onclick="renderGraph('list', currentDepth)"   style="font-size:12px;padding:4px 14px;border:none;background:#fff;color:#374151;cursor:pointer;font-weight:500">List</button>
       </div>
       <!-- Depth control -->
       <div style="display:flex;align-items:center;gap:6px">
@@ -368,6 +365,7 @@ ${hasGraph ? `
       </div>
     </div>
     <svg id="graph-svg"></svg>
+    <div id="graph-list" style="display:none;overflow-x:auto"></div>
   </div>
 </div>
 <div id="graph-tooltip"></div>
@@ -380,7 +378,7 @@ const HAS_GRAPH   = ${hasGraph}
 
 // ── Tab system ────────────────────────────────────────────────────────────────
 let graphInitialized = false
-const TABS = ['overview', 'packages', 'graph']
+const TABS = ['overview', 'graph']
 
 function switchTab(name) {
   TABS.forEach(t => {
@@ -391,8 +389,6 @@ function switchTab(name) {
   })
   if (name === 'graph' && HAS_GRAPH && !graphInitialized) {
     graphInitialized = true
-    svgRoot = d3.select('#graph-svg')
-    zoomBehavior = d3.zoom().scaleExtent([0.1, 5])
     renderGraph('force', 1)
   }
 }
@@ -444,7 +440,7 @@ function renderGraph(layout, depth) {
   currentDepth  = depth
 
   // Button states — layout
-  ;['force', 'radial'].forEach(l => {
+  ;['force', 'radial', 'list'].forEach(l => {
     const b = document.getElementById('layout-' + l); if (!b) return
     b.style.background = l === layout ? '#111827' : '#fff'
     b.style.color      = l === layout ? '#fff'    : '#374151'
@@ -456,6 +452,25 @@ function renderGraph(layout, depth) {
     b.style.color      = d === depth ? '#fff'    : '#374151'
   })
 
+  const svgEl  = document.getElementById('graph-svg')
+  const listEl = document.getElementById('graph-list')
+
+  if (layout === 'list') {
+    // Show list, hide SVG
+    if (svgEl)  svgEl.style.display  = 'none'
+    if (listEl) listEl.style.display = 'block'
+    if (simulation) { simulation.stop(); simulation = null }
+    initListView(getFilteredData(depth))
+    return
+  }
+
+  // SVG layouts — ensure svgRoot + zoomBehavior are ready
+  if (svgEl)  svgEl.style.display  = ''
+  if (listEl) listEl.style.display = 'none'
+  if (!svgRoot) {
+    svgRoot      = d3.select('#graph-svg')
+    zoomBehavior = d3.zoom().scaleExtent([0.1, 5])
+  }
   if (simulation) { simulation.stop(); simulation = null }
   svgRoot.selectAll('*').remove()
 
@@ -578,6 +593,78 @@ function initRadialTree(data) {
     .text(d => d.data.isRoot ? d.data.description : d.data.id)
 }
 
+// ── List view ─────────────────────────────────────────────────────────────────
+function initListView(data) {
+  const listEl = document.getElementById('graph-list')
+  if (!listEl) return
+
+  // Build parent map: nodeId → immediate parent id
+  const parentOf = new Map()
+  data.links.forEach(l => {
+    if (!parentOf.has(l.target)) parentOf.set(l.target, l.source)
+  })
+
+  // Find the direct dep ancestor for each node (walk up to root's child)
+  function directAncestor(id) {
+    let cur = id
+    while (parentOf.has(cur)) {
+      const p = parentOf.get(cur)
+      if (p === '__root__') return cur
+      cur = p
+    }
+    return null
+  }
+
+  const scoreColor = s => s === null ? '#9ca3af' : s >= 75 ? '#22c55e' : s >= 45 ? '#f59e0b' : '#ef4444'
+  const statusColors = { healthy:'#dcfce7;color:#15803d', stale:'#fef3c7;color:#92400e', outdated:'#fee2e2;color:#b91c1c', abandoned:'#f3f4f6;color:#374151', vulnerable:'#fef3c7;color:#b45309' }
+
+  // Exclude the synthetic root
+  const rows = data.nodes
+    .filter(n => !n.isRoot)
+    .map(n => {
+      const direct = directAncestor(n.id)
+      const parent = parentOf.get(n.id)
+      const pulledBy = n.isDirect ? '<span style="font-size:10px;color:#6b7280;font-style:italic">direct</span>'
+        : direct ? \`<span style="font-size:12px;color:#374151">\${direct}</span>\`
+        : '<span style="font-size:10px;color:#9ca3af">—</span>'
+      const scoreBadge = n.score !== null
+        ? \`<span style="font-size:13px;font-weight:700;color:\${scoreColor(n.score)}">\${n.score}</span>\`
+        : '<span style="font-size:12px;color:#9ca3af">—</span>'
+      const sc = n.status && statusColors[n.status]
+      const statusBadge = n.status
+        ? \`<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;background:\${sc?.split(';')[0]?.split(':')[1]};color:\${sc?.split(';')[1]?.split(':')[1]}">\${n.status}</span>\`
+        : '<span style="font-size:12px;color:#9ca3af">—</span>'
+      const typeBadge = n.isDirect
+        ? '<span style="font-size:10px;color:#6b7280">dep</span>'
+        : '<span style="font-size:10px;color:#f59e0b">transitive</span>'
+      return \`<tr style="border-bottom:1px solid #f3f4f6">
+        <td style="padding:10px 16px;max-width:260px">
+          <div style="font-weight:600;font-size:13px;color:#111827">\${n.id}</div>
+          \${n.description ? \`<div style="font-size:11px;color:#6b7280;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="\${n.description.replace(/"/g,'&quot;')}">\${n.description}</div>\` : ''}
+        </td>
+        <td style="padding:10px 8px;font-family:monospace;font-size:12px;color:#374151">\${n.version}</td>
+        <td style="padding:10px 8px">\${typeBadge}</td>
+        <td style="padding:10px 8px">\${pulledBy}</td>
+        <td style="padding:10px 8px">\${statusBadge}</td>
+        <td style="padding:10px 8px;text-align:center">\${scoreBadge}</td>
+      </tr>\`
+    }).join('')
+
+  listEl.innerHTML = \`<table style="border-collapse:collapse;width:100%">
+    <thead>
+      <tr>
+        <th style="text-align:left;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;padding:8px 16px;border-bottom:1px solid #e5e7eb;background:#f9fafb">Package</th>
+        <th style="text-align:left;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;padding:8px 8px;border-bottom:1px solid #e5e7eb;background:#f9fafb">Version</th>
+        <th style="text-align:left;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;padding:8px 8px;border-bottom:1px solid #e5e7eb;background:#f9fafb">Type</th>
+        <th style="text-align:left;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;padding:8px 8px;border-bottom:1px solid #e5e7eb;background:#f9fafb">Pulled in by</th>
+        <th style="text-align:left;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;padding:8px 8px;border-bottom:1px solid #e5e7eb;background:#f9fafb">Status</th>
+        <th style="text-align:center;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;padding:8px 8px;border-bottom:1px solid #e5e7eb;background:#f9fafb">Score</th>
+      </tr>
+    </thead>
+    <tbody>\${rows || '<tr><td colspan="6" style="padding:32px;text-align:center;color:#9ca3af">No packages at this depth.</td></tr>'}</tbody>
+  </table>\`
+}
+
 // ── Tooltip ───────────────────────────────────────────────────────────────────
 function showTooltip(event, d) {
   const tt = document.getElementById('graph-tooltip')
@@ -597,7 +684,7 @@ function showTooltip(event, d) {
 function hideTooltip() { document.getElementById('graph-tooltip').style.display = 'none' }
 
 function resetZoom() {
-  if (!svgRoot) return
+  if (!svgRoot || currentLayout === 'list') return
   const el = document.getElementById('graph-svg')
   const W  = el.clientWidth || 900
   const H  = el.clientHeight || 600
