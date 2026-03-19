@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // Mock the registry module so tests never hit the network
 vi.mock('../registry.js', () => ({
   fetchPackagesBatch: vi.fn(),
+  getDescription: vi.fn().mockReturnValue(''),
   getLatestVersion: vi.fn(),
   getReleaseDate: vi.fn(),
   countMissedVersions: vi.fn(),
@@ -33,6 +34,7 @@ vi.mock('node:fs', async (importOriginal) => {
 import { readFileSync, existsSync } from 'node:fs'
 import {
   fetchPackagesBatch,
+  getDescription,
   getLatestVersion,
   getReleaseDate,
   countMissedVersions,
