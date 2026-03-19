@@ -1,0 +1,6 @@
+dist/__tests__/
+*.test.js
+*.test.d.ts
+*.test.js.map
+*.test.d.ts.map
+src/

@@ -13,11 +13,19 @@
   ],
   "author": "Nicolas Deleplace",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nicolas-Deleplace/depsee.git"
+  },
+  "homepage": "https://github.com/Nicolas-Deleplace/depsee#readme",
+  "bugs": {
+    "url": "https://github.com/Nicolas-Deleplace/depsee/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "depsee": "./dist/cli.js"
+    "depsee": "dist/cli.js"
   },
   "exports": {
     ".": {
@@ -29,6 +37,7 @@
     "dist"
   ],
   "scripts": {
+    "prepublishOnly": "npm run build",
     "build": "tsc --noEmit false && node -e \"const fs=require('fs');const p='dist/cli.js';const c=fs.readFileSync(p,'utf8');if(!c.startsWith('#!/'))fs.writeFileSync(p,'#!/usr/bin/env node\\n'+c)\"",
     "dev": "tsup --watch",
     "test": "vitest run --exclude src/__tests__/e2e.test.ts",
