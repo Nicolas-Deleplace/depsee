@@ -593,18 +593,25 @@ function initRadialTree(data) {
     .text(d => d.data.isRoot ? d.data.description : d.data.id)
 }
 
-// ── List view ─────────────────────────────────────────────────────────────────
+// ── List view (accordion) ─────────────────────────────────────────────────────
+function toggleListGroup(groupId, btn) {
+  const listEl = document.getElementById('graph-list')
+  if (!listEl) return
+  const rows   = listEl.querySelectorAll(\`[data-group="\${groupId}"]\`)
+  const isOpen = rows.length && rows[0].style.display !== 'none'
+  rows.forEach(r => r.style.display = isOpen ? 'none' : 'table-row')
+  if (btn) btn.textContent = isOpen ? '▶' : '▼'
+}
+
 function initListView(data) {
   const listEl = document.getElementById('graph-list')
   if (!listEl) return
 
-  // Build parent map: nodeId → immediate parent id
+  // Build immediate parent map
   const parentOf = new Map()
-  data.links.forEach(l => {
-    if (!parentOf.has(l.target)) parentOf.set(l.target, l.source)
-  })
+  data.links.forEach(l => { if (!parentOf.has(l.target)) parentOf.set(l.target, l.source) })
 
-  // Find the direct dep ancestor for each node (walk up to root's child)
+  // Walk up to find the direct-dep ancestor of a node
   function directAncestor(id) {
     let cur = id
     while (parentOf.has(cur)) {
@@ -615,53 +622,100 @@ function initListView(data) {
     return null
   }
 
-  const scoreColor = s => s === null ? '#9ca3af' : s >= 75 ? '#22c55e' : s >= 45 ? '#f59e0b' : '#ef4444'
-  const statusColors = { healthy:'#dcfce7;color:#15803d', stale:'#fef3c7;color:#92400e', outdated:'#fee2e2;color:#b91c1c', abandoned:'#f3f4f6;color:#374151', vulnerable:'#fef3c7;color:#b45309' }
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  const scoreCol = s => s === null ? '#9ca3af' : s >= 75 ? '#22c55e' : s >= 45 ? '#f59e0b' : '#ef4444'
+  const statusStyle = {
+    healthy:   'background:#dcfce7;color:#15803d',
+    stale:     'background:#fef3c7;color:#92400e',
+    outdated:  'background:#fee2e2;color:#b91c1c',
+    abandoned: 'background:#f3f4f6;color:#374151',
+    vulnerable:'background:#fef3c7;color:#b45309',
+  }
+  const TH = \`text-align:left;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;padding:8px 12px;border-bottom:1px solid #e5e7eb;background:#f9fafb\`
 
-  // Exclude the synthetic root
-  const rows = data.nodes
-    .filter(n => !n.isRoot)
-    .map(n => {
-      const direct = directAncestor(n.id)
-      const parent = parentOf.get(n.id)
-      const pulledBy = n.isDirect ? '<span style="font-size:10px;color:#6b7280;font-style:italic">direct</span>'
-        : direct ? \`<span style="font-size:12px;color:#374151">\${direct}</span>\`
-        : '<span style="font-size:10px;color:#9ca3af">—</span>'
-      const scoreBadge = n.score !== null
-        ? \`<span style="font-size:13px;font-weight:700;color:\${scoreColor(n.score)}">\${n.score}</span>\`
-        : '<span style="font-size:12px;color:#9ca3af">—</span>'
-      const sc = n.status && statusColors[n.status]
-      const statusBadge = n.status
-        ? \`<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;background:\${sc?.split(';')[0]?.split(':')[1]};color:\${sc?.split(';')[1]?.split(':')[1]}">\${n.status}</span>\`
-        : '<span style="font-size:12px;color:#9ca3af">—</span>'
-      const typeBadge = n.isDirect
-        ? '<span style="font-size:10px;color:#6b7280">dep</span>'
-        : '<span style="font-size:10px;color:#f59e0b">transitive</span>'
-      return \`<tr style="border-bottom:1px solid #f3f4f6">
-        <td style="padding:10px 16px;max-width:260px">
-          <div style="font-weight:600;font-size:13px;color:#111827">\${n.id}</div>
-          \${n.description ? \`<div style="font-size:11px;color:#6b7280;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="\${n.description.replace(/"/g,'&quot;')}">\${n.description}</div>\` : ''}
+  function scoreBadge(score) {
+    return score !== null
+      ? \`<span style="font-size:13px;font-weight:700;color:\${scoreCol(score)}">\${score}</span>\`
+      : '<span style="font-size:12px;color:#9ca3af">—</span>'
+  }
+  function statusBadge(status) {
+    const s = status && statusStyle[status]
+    return s
+      ? \`<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;\${s}">\${status}</span>\`
+      : '<span style="font-size:12px;color:#9ca3af">—</span>'
+  }
+  function descLine(n) {
+    return n.description
+      ? \`<div style="font-size:11px;color:#6b7280;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="\${n.description.replace(/"/g,'&quot;')}">\${n.description}</div>\`
+      : ''
+  }
+
+  // ── Group transitive deps under their direct ancestor ─────────────────────
+  const directNodes = data.nodes.filter(n => !n.isRoot && n.isDirect)
+  const transNodes  = data.nodes.filter(n => !n.isRoot && !n.isDirect)
+
+  const childrenOf = new Map()   // directName → transitive nodes[]
+  transNodes.forEach(n => {
+    const da = directAncestor(n.id)
+    if (da) {
+      if (!childrenOf.has(da)) childrenOf.set(da, [])
+      childrenOf.get(da).push(n)
+    }
+  })
+
+  // ── Build rows ────────────────────────────────────────────────────────────
+  let tbody = ''
+  directNodes.forEach((n, i) => {
+    const children   = childrenOf.get(n.id) || []
+    const hasKids    = children.length > 0
+    const countLabel = hasKids ? \`<span style="font-size:11px;color:#9ca3af">\${children.length} transitive dep\${children.length > 1 ? 's' : ''}</span>\` : ''
+    const toggleBtn  = hasKids
+      ? \`<button onclick="toggleListGroup(\${i}, this)" title="Toggle transitive deps"
+           style="width:20px;height:20px;border-radius:4px;border:1px solid #e5e7eb;background:#fff;cursor:pointer;color:#6b7280;padding:0;display:inline-flex;align-items:center;justify-content:center;margin-right:8px;flex-shrink:0;font-size:10px">▶</button>\`
+      : \`<span style="display:inline-block;width:20px;margin-right:8px;flex-shrink:0"></span>\`
+
+    tbody += \`<tr style="border-bottom:1px solid #f3f4f6">
+      <td style="padding:10px 16px;max-width:280px">
+        <div style="display:flex;align-items:flex-start">
+          \${toggleBtn}
+          <div style="min-width:0">
+            <div style="font-weight:600;font-size:13px;color:#111827">\${n.id}</div>
+            \${descLine(n)}
+          </div>
+        </div>
+      </td>
+      <td style="padding:10px 8px;font-family:monospace;font-size:12px;color:#374151">\${n.version}</td>
+      <td style="padding:10px 8px">\${statusBadge(n.status)}</td>
+      <td style="padding:10px 8px;text-align:center">\${scoreBadge(n.score)}</td>
+      <td style="padding:10px 8px">\${countLabel}</td>
+    </tr>\`
+
+    // Collapsed transitive sub-rows
+    children.forEach(c => {
+      const immParent = parentOf.get(c.id)
+      const via = immParent && immParent !== '__root__' ? immParent : n.id
+      tbody += \`<tr data-group="\${i}" style="display:none;border-bottom:1px solid #f8fafc;background:#fafbfc">
+        <td style="padding:8px 16px 8px 48px;max-width:280px">
+          <div style="font-size:12px;color:#374151;font-weight:500">\${c.id}</div>
+          \${descLine(c)}
         </td>
-        <td style="padding:10px 8px;font-family:monospace;font-size:12px;color:#374151">\${n.version}</td>
-        <td style="padding:10px 8px">\${typeBadge}</td>
-        <td style="padding:10px 8px">\${pulledBy}</td>
-        <td style="padding:10px 8px">\${statusBadge}</td>
-        <td style="padding:10px 8px;text-align:center">\${scoreBadge}</td>
+        <td style="padding:8px 8px;font-family:monospace;font-size:11px;color:#6b7280">\${c.version}</td>
+        <td style="padding:8px 8px">\${statusBadge(c.status)}</td>
+        <td style="padding:8px 8px;text-align:center">\${scoreBadge(c.score)}</td>
+        <td style="padding:8px 8px;font-size:11px;color:#9ca3af">via \${via}</td>
       </tr>\`
-    }).join('')
+    })
+  })
 
   listEl.innerHTML = \`<table style="border-collapse:collapse;width:100%">
-    <thead>
-      <tr>
-        <th style="text-align:left;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;padding:8px 16px;border-bottom:1px solid #e5e7eb;background:#f9fafb">Package</th>
-        <th style="text-align:left;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;padding:8px 8px;border-bottom:1px solid #e5e7eb;background:#f9fafb">Version</th>
-        <th style="text-align:left;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;padding:8px 8px;border-bottom:1px solid #e5e7eb;background:#f9fafb">Type</th>
-        <th style="text-align:left;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;padding:8px 8px;border-bottom:1px solid #e5e7eb;background:#f9fafb">Pulled in by</th>
-        <th style="text-align:left;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;padding:8px 8px;border-bottom:1px solid #e5e7eb;background:#f9fafb">Status</th>
-        <th style="text-align:center;font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;padding:8px 8px;border-bottom:1px solid #e5e7eb;background:#f9fafb">Score</th>
-      </tr>
-    </thead>
-    <tbody>\${rows || '<tr><td colspan="6" style="padding:32px;text-align:center;color:#9ca3af">No packages at this depth.</td></tr>'}</tbody>
+    <thead><tr>
+      <th style="\${TH};padding-left:16px">Package</th>
+      <th style="\${TH}">Version</th>
+      <th style="\${TH}">Status</th>
+      <th style="\${TH};text-align:center">Score</th>
+      <th style="\${TH}"></th>
+    </tr></thead>
+    <tbody>\${tbody || '<tr><td colspan="5" style="padding:32px;text-align:center;color:#9ca3af">No packages at this depth.</td></tr>'}</tbody>
   </table>\`
 }
 
