@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { writeFile } from 'node:fs/promises'
 import { z } from 'zod'
-import type { AnalysisReport, AnalyzeOptions, DepInfo, DepType } from './types.js'
+import type { AnalysisReport, AnalyzeOptions, DepInfo, DepNode, DepType, TransitiveGraph } from './types.js'
 import { detectPackageManager } from './detector.js'
 import {
   fetchPackagesBatch,
@@ -34,6 +34,74 @@ function parseVersion(range: string): string {
 function daysBetween(from: string, to: string): number {
   const diff = new Date(to).getTime() - new Date(from).getTime()
   return Math.max(0, Math.round(diff / (1000 * 60 * 60 * 24)))
+}
+
+// ─── Transitive graph builder ─────────────────────────────────────────────────
+
+/**
+ * Parses `package-lock.json` (v2/v3) and builds a recursive dependency tree
+ * for each direct dependency, up to `maxDepth` levels deep.
+ *
+ * Returns an empty object when no lockfile is found or the format is unsupported.
+ */
+export function buildTransitiveGraph(
+  cwd: string,
+  directDeps: string[],
+  maxDepth = 4,
+): TransitiveGraph {
+  let raw: Record<string, unknown>
+  try {
+    raw = JSON.parse(readFileSync(join(cwd, 'package-lock.json'), 'utf8'))
+  } catch {
+    return {}
+  }
+
+  // Only v2/v3 lockfiles have the `packages` field
+  const packages = raw['packages'] as Record<string, { version?: string; dependencies?: Record<string, string> }> | undefined
+  if (!packages) return {}
+
+  // Build a flat adjacency map: package-name → { version, direct-child-names }
+  type AdjEntry = { version: string; deps: string[] }
+  const adj = new Map<string, AdjEntry>()
+
+  for (const [key, info] of Object.entries(packages)) {
+    if (key === '') continue // root entry
+
+    // key is like "node_modules/foo" or "node_modules/@scope/bar"
+    const name = key.replace(/^node_modules\//, '')
+    adj.set(name, {
+      version: info.version ?? 'unknown',
+      deps: Object.keys(info.dependencies ?? {}),
+    })
+  }
+
+  // Recursive builder (visited set prevents cycles)
+  function buildNode(name: string, visited: ReadonlySet<string>, depth: number): DepNode {
+    const info = adj.get(name)
+    const version = info?.version ?? 'unknown'
+
+    if (!info || depth >= maxDepth || visited.has(name)) {
+      return { name, version, children: [] }
+    }
+
+    const next = new Set(visited)
+    next.add(name)
+
+    return {
+      name,
+      version,
+      children: info.deps
+        .filter((d) => d !== name)
+        .map((d) => buildNode(d, next, depth + 1)),
+    }
+  }
+
+  const graph: TransitiveGraph = {}
+  for (const dep of directDeps) {
+    if (!adj.has(dep)) continue
+    graph[dep] = buildNode(dep, new Set(), 0)
+  }
+  return graph
 }
 
 // ─── Main analyze function ────────────────────────────────────────────────────
@@ -180,7 +248,11 @@ export async function analyze(options: AnalyzeOptions = {}): Promise<AnalysisRep
   // Sort: worst score first
   packages.sort((a, b) => a.score - b.score)
 
-  // 6. Compute summary
+  // 6. Build transitive graph from lockfile
+  const directDepNames = [...depsMap.keys()]
+  const transitiveGraph = buildTransitiveGraph(cwd, directDepNames)
+
+  // 7. Compute summary
   const summary = {
     projectName,
     total:      packages.length,
@@ -198,12 +270,13 @@ export async function analyze(options: AnalyzeOptions = {}): Promise<AnalysisRep
   return {
     summary,
     packages,
+    transitiveGraph,
     async toHTML(outputPath = 'depsee-report.html') {
-      const html = renderHTML({ summary, packages })
+      const html = renderHTML({ summary, packages, transitiveGraph })
       await writeFile(join(cwd, outputPath), html, 'utf8')
     },
     async toJSON(outputPath = 'depsee-report.json') {
-      const json = JSON.stringify({ summary, packages }, null, 2)
+      const json = JSON.stringify({ summary, packages, transitiveGraph }, null, 2)
       await writeFile(join(cwd, outputPath), json, 'utf8')
     },
   }
