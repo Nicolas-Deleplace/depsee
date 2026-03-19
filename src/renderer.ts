@@ -340,14 +340,27 @@ ${hasGraph ? `
 <div id="pane-graph" style="display:none;padding:24px 32px">
   <div style="background:#fff;border-radius:12px;border:1px solid #e5e7eb;overflow:hidden;position:relative">
     <!-- Toolbar -->
-    <div style="padding:14px 20px;border-bottom:1px solid #f3f4f6;display:flex;align-items:center;gap:12px">
+    <div style="padding:14px 20px;border-bottom:1px solid #f3f4f6;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <span style="font-size:13px;font-weight:700;color:#374151">Dependency graph</span>
-      <span style="font-size:12px;color:#9ca3af">Drag · scroll to zoom · hover for details</span>
-      <div style="margin-left:auto;display:flex;gap:8px">
-        <button onclick="resetZoom()" style="font-size:12px;padding:4px 12px;border-radius:6px;border:1px solid #e5e7eb;background:#fff;color:#374151;cursor:pointer">Reset zoom</button>
-        <button onclick="toggleLabels()" id="btn-labels" style="font-size:12px;padding:4px 12px;border-radius:6px;border:1px solid #e5e7eb;background:#fff;color:#374151;cursor:pointer">Labels: direct only</button>
+      <!-- Layout toggle -->
+      <div style="display:flex;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden">
+        <button id="layout-force"  onclick="renderGraph('force', currentDepth)"  style="font-size:12px;padding:4px 14px;border:none;background:#111827;color:#fff;cursor:pointer;font-weight:500">Force</button>
+        <button id="layout-radial" onclick="renderGraph('radial', currentDepth)" style="font-size:12px;padding:4px 14px;border:none;background:#fff;color:#374151;cursor:pointer;font-weight:500">Radial tree</button>
       </div>
-      <div style="display:flex;align-items:center;gap:12px;font-size:11px;color:#9ca3af">
+      <!-- Depth control -->
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="font-size:11px;color:#9ca3af;font-weight:600">DEPTH</span>
+        <div style="display:flex;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden">
+          <button id="depth-1"   onclick="renderGraph(currentLayout,1)"        style="font-size:12px;padding:4px 10px;border:none;background:#111827;color:#fff;cursor:pointer">Direct</button>
+          <button id="depth-2"   onclick="renderGraph(currentLayout,2)"        style="font-size:12px;padding:4px 10px;border:none;background:#fff;color:#374151;cursor:pointer">+1</button>
+          <button id="depth-3"   onclick="renderGraph(currentLayout,3)"        style="font-size:12px;padding:4px 10px;border:none;background:#fff;color:#374151;cursor:pointer">+2</button>
+          <button id="depth-all" onclick="renderGraph(currentLayout,Infinity)" style="font-size:12px;padding:4px 10px;border:none;background:#fff;color:#374151;cursor:pointer">All</button>
+        </div>
+      </div>
+      <div style="margin-left:auto">
+        <button onclick="resetZoom()" style="font-size:12px;padding:4px 12px;border-radius:6px;border:1px solid #e5e7eb;background:#fff;color:#374151;cursor:pointer">Reset zoom</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;font-size:11px;color:#9ca3af">
         <span>⬤ <span style="color:#22c55e">healthy</span></span>
         <span>⬤ <span style="color:#f59e0b">stale</span></span>
         <span>⬤ <span style="color:#ef4444">at risk</span></span>
@@ -373,99 +386,128 @@ function switchTab(name) {
   TABS.forEach(t => {
     const pane = document.getElementById('pane-' + t)
     const btn  = document.getElementById('tab-btn-' + t)
-    if (pane) pane.style.display = t === name ? (t === 'graph' ? 'block' : 'block') : 'none'
+    if (pane) pane.style.display = t === name ? 'block' : 'none'
     if (btn)  btn.classList.toggle('active', t === name)
   })
   if (name === 'graph' && HAS_GRAPH && !graphInitialized) {
     graphInitialized = true
-    initGraph()
+    svgRoot = d3.select('#graph-svg')
+    zoomBehavior = d3.zoom().scaleExtent([0.1, 5])
+    renderGraph('force', 1)
   }
 }
 
-// ── D3 Force-directed graph ───────────────────────────────────────────────────
-let zoomBehavior, svgRoot
+// ── D3 shared state ───────────────────────────────────────────────────────────
+// Raw data kept immutable — D3 mutates link objects during simulation
+const RAW_NODES = GRAPH_DATA.nodes
+const RAW_LINKS = GRAPH_DATA.links.map(l => ({ source: l.source, target: l.target }))
 
-function nodeRadius(d) {
-  if (d.isRoot)   return 18
-  if (d.isDirect) return 12
-  return 7
-}
+let currentLayout = 'force'
+let currentDepth  = 1
+let svgRoot, zoomBehavior, simulation
 
+// ── Node helpers ──────────────────────────────────────────────────────────────
+function nodeRadius(d) { return d.isRoot ? 18 : d.isDirect ? 12 : 7 }
 function nodeColor(d) {
-  if (d.isRoot)       return '#111827'
+  if (d.isRoot)         return '#111827'
   if (d.score === null) return '#d1d5db'
-  if (d.score >= 75)  return '#22c55e'
-  if (d.score >= 45)  return '#f59e0b'
+  if (d.score >= 75)    return '#22c55e'
+  if (d.score >= 45)    return '#f59e0b'
   return '#ef4444'
 }
 
-function nodeStroke(d) {
-  if (d.isRoot)   return '#374151'
-  if (d.isDirect) return '#fff'
-  return '#fff'
+// ── Depth filter ──────────────────────────────────────────────────────────────
+function getFilteredData(maxDepth) {
+  const visible = new Set(['__root__'])
+  let frontier  = ['__root__']
+  for (let d = 0; d < maxDepth; d++) {
+    const next = []
+    for (const srcId of frontier) {
+      RAW_LINKS.forEach(l => {
+        if (l.source === srcId && !visible.has(l.target)) {
+          visible.add(l.target); next.push(l.target)
+        }
+      })
+    }
+    frontier = next
+    if (!frontier.length) break
+  }
+  return {
+    nodes: RAW_NODES.filter(n => visible.has(n.id)).map(n => ({ ...n })),
+    links: RAW_LINKS.filter(l => visible.has(l.source) && visible.has(l.target)).map(l => ({ ...l })),
+  }
 }
 
-function initGraph() {
-  const svgEl = document.getElementById('graph-svg')
-  const W = svgEl.clientWidth || 900
-  const H = svgEl.clientHeight || 600
+// ── Layout + depth orchestrator ───────────────────────────────────────────────
+function renderGraph(layout, depth) {
+  currentLayout = layout
+  currentDepth  = depth
 
-  svgRoot = d3.select('#graph-svg')
+  // Button states — layout
+  ;['force', 'radial'].forEach(l => {
+    const b = document.getElementById('layout-' + l); if (!b) return
+    b.style.background = l === layout ? '#111827' : '#fff'
+    b.style.color      = l === layout ? '#fff'    : '#374151'
+  })
+  // Button states — depth
+  ;[[1,'1'],[2,'2'],[3,'3'],[Infinity,'all']].forEach(([d, k]) => {
+    const b = document.getElementById('depth-' + k); if (!b) return
+    b.style.background = d === depth ? '#111827' : '#fff'
+    b.style.color      = d === depth ? '#fff'    : '#374151'
+  })
 
-  // Arrow marker
+  if (simulation) { simulation.stop(); simulation = null }
+  svgRoot.selectAll('*').remove()
+
+  const filtered = getFilteredData(depth)
+  if (layout === 'force') initForceGraph(filtered)
+  else                    initRadialTree(filtered)
+}
+
+// ── Force-directed ────────────────────────────────────────────────────────────
+function initForceGraph(data) {
+  const el = document.getElementById('graph-svg')
+  const W  = el.clientWidth || 900
+  const H  = el.clientHeight || 600
+
   svgRoot.append('defs').append('marker')
     .attr('id', 'arrow').attr('viewBox', '0 -4 8 8')
     .attr('refX', 22).attr('refY', 0)
-    .attr('markerWidth', 5).attr('markerHeight', 5)
-    .attr('orient', 'auto')
+    .attr('markerWidth', 5).attr('markerHeight', 5).attr('orient', 'auto')
     .append('path').attr('d', 'M0,-4L8,0L0,4').attr('fill', '#d1d5db')
 
   const g = svgRoot.append('g')
+  svgRoot.call(zoomBehavior.on('zoom', e => g.attr('transform', e.transform)))
+  svgRoot.call(zoomBehavior.transform, d3.zoomIdentity)
 
-  zoomBehavior = d3.zoom().scaleExtent([0.1, 5])
-    .on('zoom', e => g.attr('transform', e.transform))
-  svgRoot.call(zoomBehavior)
+  simulation = d3.forceSimulation(data.nodes)
+    .force('link',    d3.forceLink(data.links).id(d => d.id).distance(d => d.source.isRoot ? 160 : 90))
+    .force('charge',  d3.forceManyBody().strength(d => d.isRoot ? -800 : d.isDirect ? -400 : -150))
+    .force('center',  d3.forceCenter(W / 2, H / 2))
+    .force('collide', d3.forceCollide(d => nodeRadius(d) + 10))
 
-  // Clone nodes/links so D3 can mutate them
-  const nodes = GRAPH_DATA.nodes.map(d => ({...d}))
-  const links = GRAPH_DATA.links.map(d => ({...d}))
-
-  const sim = d3.forceSimulation(nodes)
-    .force('link', d3.forceLink(links).id(d => d.id).distance(d => d.source.isRoot ? 120 : 70))
-    .force('charge', d3.forceManyBody().strength(d => d.isRoot ? -600 : d.isDirect ? -300 : -120))
-    .force('center', d3.forceCenter(W / 2, H / 2))
-    .force('collide', d3.forceCollide(d => nodeRadius(d) + 8))
-
-  // Links
   const link = g.append('g').attr('stroke', '#e5e7eb').attr('stroke-width', 1.2)
-    .selectAll('line').data(links).join('line')
-    .attr('marker-end', 'url(#arrow)')
+    .selectAll('line').data(data.links).join('line').attr('marker-end', 'url(#arrow)')
 
-  // Nodes
-  const node = g.append('g').selectAll('circle').data(nodes).join('circle')
-    .attr('class', 'node')
-    .attr('r', nodeRadius)
-    .attr('fill', nodeColor)
-    .attr('stroke', nodeStroke)
+  const node = g.append('g').selectAll('circle').data(data.nodes).join('circle')
+    .attr('r', nodeRadius).attr('fill', nodeColor)
+    .attr('stroke', d => d.isRoot ? '#374151' : '#fff')
     .attr('stroke-width', d => d.isRoot ? 3 : 1.5)
     .call(d3.drag()
-      .on('start', (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y })
+      .on('start', (e, d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y })
       .on('drag',  (e, d) => { d.fx = e.x; d.fy = e.y })
-      .on('end',   (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null })
+      .on('end',   (e, d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null })
     )
-    .on('mousemove', showTooltip)
-    .on('mouseout',  hideTooltip)
+    .on('mousemove', showTooltip).on('mouseout', hideTooltip)
 
-  // Labels
-  const label = g.append('g').selectAll('text').data(nodes).join('text')
+  const label = g.append('g').selectAll('text').data(data.nodes).join('text')
     .text(d => d.isRoot ? d.description : d.id)
     .attr('font-size', d => d.isRoot ? 13 : d.isDirect ? 11 : 9)
     .attr('font-weight', d => d.isRoot || d.isDirect ? '700' : '400')
-    .attr('fill', d => d.isRoot ? '#111827' : '#374151')
-    .attr('pointer-events', 'none')
+    .attr('fill', '#374151').attr('pointer-events', 'none')
     .attr('display', d => d.isRoot || d.isDirect ? null : 'none')
 
-  sim.on('tick', () => {
+  simulation.on('tick', () => {
     link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
         .attr('x2', d => d.target.x).attr('y2', d => d.target.y)
     node.attr('cx', d => d.x).attr('cy', d => d.y)
@@ -473,16 +515,79 @@ function initGraph() {
   })
 }
 
-// Tooltip
+// ── Radial tree ───────────────────────────────────────────────────────────────
+function initRadialTree(data) {
+  const el = document.getElementById('graph-svg')
+  const W  = el.clientWidth || 900
+  const H  = el.clientHeight || 600
+
+  const g = svgRoot.append('g')
+  svgRoot.call(zoomBehavior.on('zoom', e => g.attr('transform', e.transform)))
+  svgRoot.call(zoomBehavior.transform, d3.zoomIdentity.translate(W / 2, H / 2))
+
+  // Build parent→children map from links (strings, not mutated)
+  const byId      = new Map(data.nodes.map(n => [n.id, n]))
+  const childrenOf = new Map(data.nodes.map(n => [n.id, []]))
+  data.links.forEach(l => {
+    const arr = childrenOf.get(l.source)
+    if (arr && !arr.includes(l.target)) arr.push(l.target)
+  })
+
+  function buildHier(id, seen) {
+    const node = byId.get(id); if (!node) return null
+    const kids = (childrenOf.get(id) || [])
+      .filter(c => !seen.has(c))
+      .map(c => { seen.add(c); return buildHier(c, seen) })
+      .filter(Boolean)
+    return { ...node, children: kids }
+  }
+
+  const treeData = buildHier('__root__', new Set(['__root__']))
+  if (!treeData) return
+
+  const radius = Math.min(W, H) / 2 - 120
+  const root   = d3.hierarchy(treeData)
+  d3.tree().size([2 * Math.PI, radius])
+    .separation((a, b) => (a.parent === b.parent ? 1 : 2) / a.depth)(root)
+
+  // Links
+  g.append('g').attr('fill', 'none').attr('stroke', '#e5e7eb').attr('stroke-width', 1.2)
+    .selectAll('path').data(root.links()).join('path')
+    .attr('d', d3.linkRadial().angle(d => d.x).radius(d => d.y))
+
+  // Nodes
+  const node = g.append('g').selectAll('g').data(root.descendants()).join('g')
+    .attr('transform', d => \`rotate(\${d.x * 180 / Math.PI - 90}) translate(\${d.y}, 0)\`)
+
+  node.append('circle')
+    .attr('r', d => nodeRadius(d.data))
+    .attr('fill', d => nodeColor(d.data))
+    .attr('stroke', d => d.data.isRoot ? '#374151' : '#fff')
+    .attr('stroke-width', d => d.data.isRoot ? 3 : 1.5)
+    .on('mousemove', (e, d) => showTooltip(e, d.data))
+    .on('mouseout', hideTooltip)
+
+  node.append('text')
+    .attr('dy', '0.31em')
+    .attr('x', d => d.data.isRoot ? 0 : (d.x < Math.PI ? nodeRadius(d.data) + 5 : -nodeRadius(d.data) - 5))
+    .attr('text-anchor', d => d.data.isRoot ? 'middle' : (d.x < Math.PI ? 'start' : 'end'))
+    .attr('transform', d => (!d.data.isRoot && d.x >= Math.PI) ? 'rotate(180)' : null)
+    .attr('font-size', d => d.data.isRoot ? 13 : d.data.isDirect ? 11 : 9)
+    .attr('font-weight', d => d.data.isRoot || d.data.isDirect ? '700' : '400')
+    .attr('fill', '#374151').attr('pointer-events', 'none')
+    .text(d => d.data.isRoot ? d.data.description : d.data.id)
+}
+
+// ── Tooltip ───────────────────────────────────────────────────────────────────
 function showTooltip(event, d) {
   const tt = document.getElementById('graph-tooltip')
   const c  = d.score === null ? '#9ca3af' : d.score >= 75 ? '#22c55e' : d.score >= 45 ? '#f59e0b' : '#ef4444'
   let html = \`<div style="font-weight:700;font-size:13px;margin-bottom:3px">\${d.isRoot ? d.description : d.id}</div>\`
   if (!d.isRoot) {
-    html += \`<div style="color:#94a3b8;margin-bottom:4px;font-size:11px">\${d.version}</div>\`
+    html += \`<div style="color:#94a3b8;font-size:11px;margin-bottom:4px">\${d.version}</div>\`
     if (d.description) html += \`<div style="color:#cbd5e1;margin-bottom:6px">\${d.description}</div>\`
     if (d.score !== null) html += \`<div>Score <span style="color:\${c};font-weight:700">\${d.score}/100</span>\${d.status ? ' · ' + d.status : ''}</div>\`
-    else html += \`<div style="color:#9ca3af">Transitive — not directly analysed</div>\`
+    else html += \`<div style="color:#9ca3af;font-size:11px">Transitive — not directly analysed</div>\`
   }
   tt.innerHTML = html
   tt.style.display = 'block'
@@ -492,20 +597,12 @@ function showTooltip(event, d) {
 function hideTooltip() { document.getElementById('graph-tooltip').style.display = 'none' }
 
 function resetZoom() {
-  svgRoot && svgRoot.transition().duration(400).call(zoomBehavior.transform, d3.zoomIdentity)
-}
-
-let labelsMode = 0 // 0=direct only, 1=all, 2=none
-function toggleLabels() {
-  labelsMode = (labelsMode + 1) % 3
-  const modes = ['direct only', 'all', 'none']
-  document.getElementById('btn-labels').textContent = 'Labels: ' + modes[labelsMode]
   if (!svgRoot) return
-  svgRoot.selectAll('text').attr('display', function(d) {
-    if (labelsMode === 1) return null
-    if (labelsMode === 2) return 'none'
-    return d.isRoot || d.isDirect ? null : 'none'
-  })
+  const el = document.getElementById('graph-svg')
+  const W  = el.clientWidth || 900
+  const H  = el.clientHeight || 600
+  const t  = currentLayout === 'radial' ? d3.zoomIdentity.translate(W / 2, H / 2) : d3.zoomIdentity
+  svgRoot.transition().duration(400).call(zoomBehavior.transform, t)
 }
 
 let activeStatus = 'all'
