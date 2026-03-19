@@ -121,6 +121,7 @@ export function startServer(options: ServeOptions): Promise<void> {
             const cached = renderHTML({
               summary: currentReport.summary,
               packages: currentReport.packages,
+              transitiveGraph: currentReport.transitiveGraph,
               interactive: true,
               port,
             })
@@ -135,6 +136,7 @@ export function startServer(options: ServeOptions): Promise<void> {
           const html = renderHTML({
             summary: currentReport.summary,
             packages: currentReport.packages,
+            transitiveGraph: currentReport.transitiveGraph,
             interactive: true,
             port,
           })
@@ -247,6 +249,7 @@ export function startServer(options: ServeOptions): Promise<void> {
           const html = renderHTML({
             summary: currentReport.summary,
             packages: currentReport.packages,
+            transitiveGraph: currentReport.transitiveGraph,
             interactive: true,
           })
           safeSend(res, 200, html, 'text/html; charset=utf-8')
