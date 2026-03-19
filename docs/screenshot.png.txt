@@ -1,0 +1,1 @@
+Screenshot placeholder - run 'depsee --serve' to see the live UI
