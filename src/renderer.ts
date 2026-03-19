@@ -1,9 +1,11 @@
-import type { DepInfo, ReportSummary } from './types.js'
+import type { DepInfo, DepNode, ReportSummary, TransitiveGraph } from './types.js'
 import { getUpdateCommand, getRemoveCommand, getPackageManagerLabel } from './detector.js'
 
 export interface RenderInput {
   summary: ReportSummary
   packages: DepInfo[]
+  /** Transitive dependency graph built from the lockfile. */
+  transitiveGraph?: TransitiveGraph
   /** Enable interactive buttons (used in --serve mode). Defaults to false. */
   interactive?: boolean
   /** Port of the local server, needed for interactive fetch calls. */
@@ -127,10 +129,88 @@ function buildChartData(summary: ReportSummary): string {
   })
 }
 
+// ─── Transitive graph renderer ────────────────────────────────────────────────
+
+/** Counts every descendant in a node's subtree (not just direct children). */
+function countDescendants(node: DepNode): number {
+  return node.children.reduce((sum, c) => sum + 1 + countDescendants(c), 0)
+}
+
+/** Renders a single tree node recursively, indented by `depth`. */
+function renderDepNode(node: DepNode, depth: number, scoreMap: Map<string, DepInfo>): string {
+  const pkg   = scoreMap.get(node.name)
+  const color = pkg ? scoreColor(pkg.score) : '#d1d5db'
+  const hasChildren = node.children.length > 0
+  const nodeId = `tn-${node.name.replace(/[^a-z0-9@]/gi, '-')}-d${depth}`
+  const indent = depth * 18
+
+  return `
+    <div style="margin-left:${indent}px">
+      <div style="display:flex;align-items:center;gap:6px;padding:3px 0">
+        ${hasChildren
+          ? `<button onclick="toggleNode('${nodeId}',this)" style="width:14px;height:14px;border:none;background:none;cursor:pointer;color:#9ca3af;font-size:9px;padding:0;flex-shrink:0;transition:transform 0.15s">▶</button>`
+          : `<span style="width:14px;flex-shrink:0"></span>`}
+        <span style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0"></span>
+        <span style="font-size:12px;color:#374151;font-family:monospace">${node.name}</span>
+        <span style="font-size:11px;color:#9ca3af">${node.version}</span>
+        ${hasChildren ? `<span style="font-size:10px;color:#9ca3af">(${node.children.length})</span>` : ''}
+      </div>
+      ${hasChildren
+        ? `<div id="${nodeId}" style="display:none">${node.children.map((c) => renderDepNode(c, depth + 1, scoreMap)).join('')}</div>`
+        : ''}
+    </div>`
+}
+
+/** Renders the full transitive graph section. Returns empty string if no data. */
+function renderTransitiveGraph(graph: TransitiveGraph, packages: DepInfo[]): string {
+  const entries = Object.entries(graph)
+  if (entries.length === 0) return ''
+
+  const scoreMap = new Map(packages.map((p) => [p.name, p]))
+
+  const rows = entries.map(([name, node]) => {
+    const pkg   = scoreMap.get(name)
+    const color = pkg ? scoreColor(pkg.score) : '#d1d5db'
+    const total = countDescendants(node)
+    const rootId = `tg-${name.replace(/[^a-z0-9@]/gi, '-')}`
+
+    return `
+      <div style="border-bottom:1px solid #f3f4f6">
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 0">
+          <button onclick="toggleNode('${rootId}',this)"
+            style="display:flex;align-items:center;gap:8px;border:none;background:none;cursor:pointer;text-align:left;padding:0">
+            <span style="color:#9ca3af;font-size:9px;transition:transform 0.15s">▶</span>
+            <span style="width:10px;height:10px;border-radius:50%;background:${color};flex-shrink:0"></span>
+            <span style="font-size:13px;font-weight:600;color:#111827;font-family:monospace">${name}</span>
+            <span style="font-size:12px;color:#9ca3af">${node.version}</span>
+          </button>
+          <span style="font-size:11px;background:#f3f4f6;color:#6b7280;padding:1px 8px;border-radius:999px">${total} transitive</span>
+        </div>
+        <div id="${rootId}" style="display:none;padding-bottom:8px">
+          ${node.children.map((c) => renderDepNode(c, 1, scoreMap)).join('')}
+        </div>
+      </div>`
+  }).join('')
+
+  return `
+  <!-- Transitive dependency graph -->
+  <div style="background:#fff;border-radius:12px;border:1px solid #e5e7eb;padding:24px;margin-bottom:24px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+      <div style="font-size:13px;font-weight:700;color:#374151">Transitive dependency graph</div>
+      <div style="font-size:12px;color:#9ca3af">${entries.length} direct deps · click to expand</div>
+    </div>
+    <div style="font-size:12px;color:#9ca3af;margin-bottom:16px">
+      Dot colour = health score of that package. Grey = not in your direct deps.
+    </div>
+    <div>${rows}</div>
+  </div>`
+}
+
 // ─── Main renderer ────────────────────────────────────────────────────────────
 
-export function renderHTML({ summary, packages, interactive = false, port = 4242 }: RenderInput): string {
+export function renderHTML({ summary, packages, transitiveGraph = {}, interactive = false, port = 4242 }: RenderInput): string {
   const rows = packages.map((p) => packageRow(p, interactive, summary.packageManager)).join('')
+  const graphSection = renderTransitiveGraph(transitiveGraph, packages)
   const chartData = buildChartData(summary)
   const pmLabel = getPackageManagerLabel(summary.packageManager)
   const globalColor = scoreColor(summary.score)
@@ -152,6 +232,7 @@ export function renderHTML({ summary, packages, interactive = false, port = 4242
     .pkg-row:hover { background: #f9fafb; }
     table { border-collapse: collapse; width: 100%; }
     th { text-align:left; font-size:11px; font-weight:600; color:#6b7280; text-transform:uppercase; letter-spacing:0.05em; padding:8px 16px; border-bottom:1px solid #e5e7eb; background:#f9fafb; }
+    .tg-arrow { display:inline-block; transition:transform 0.15s; }
   </style>
 </head>
 <body>
@@ -213,6 +294,8 @@ export function renderHTML({ summary, packages, interactive = false, port = 4242
     </div>
   </div>
 
+  ${graphSection}
+
   <!-- Filters -->
   <div style="background:#fff;border-radius:12px;border:1px solid #e5e7eb;padding:16px 24px;margin-bottom:16px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">
     <span style="font-size:12px;font-weight:600;color:#6b7280">FILTER</span>
@@ -261,6 +344,18 @@ export function renderHTML({ summary, packages, interactive = false, port = 4242
 
 <script>
 const CHART_DATA = ${chartData}
+
+// ── Transitive graph toggle ───────────────────────────────────────────────────
+function toggleNode(id, btn) {
+  const el = document.getElementById(id)
+  if (!el) return
+  const isOpen = el.style.display !== 'none'
+  el.style.display = isOpen ? 'none' : 'block'
+  // Rotate the ▶ arrow on the button
+  const arrow = btn ? btn.querySelector('span') : null
+  if (arrow) arrow.style.transform = isOpen ? '' : 'rotate(90deg)'
+}
+
 let activeStatus = 'all'
 let vulnOnly = false
 let devOnly = false
