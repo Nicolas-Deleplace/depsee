@@ -6,8 +6,11 @@ An interactive CLI dashboard for npm dependency health — health scores, datavi
 
 [![CI](https://github.com/Nicolas-Deleplace/depsee/actions/workflows/ci.yml/badge.svg)](https://github.com/Nicolas-Deleplace/depsee/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/depsee)](https://www.npmjs.com/package/depsee)
+[![npm downloads](https://img.shields.io/npm/dm/depsee)](https://www.npmjs.com/package/depsee)
 [![Node.js >=20](https://img.shields.io/node/v/depsee)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+![depsee demo](docs/demo.gif)
 
 ---
 
