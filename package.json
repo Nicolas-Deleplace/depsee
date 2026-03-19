@@ -1,7 +1,7 @@
 {
   "name": "depsee",
   "version": "0.1.0",
-  "description": "See your dependencies like never before \u2014 interactive dependency dashboard with health scores, dataviz and security audit",
+  "description": "See your dependencies like never before — interactive dependency dashboard with health scores, dataviz and security audit",
   "keywords": [
     "dependencies",
     "npm",
@@ -43,6 +43,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
+    "@vitest/coverage-v8": "^2.1.9",
     "tsup": "^8.0.0",
     "typescript": "^5.4.0",
     "vitest": "^2.1.9"
